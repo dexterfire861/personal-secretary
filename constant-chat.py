@@ -1,15 +1,13 @@
 import json
-from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from memory import (
+    BASE_MODEL, CONTEXT_FILE, OLLAMA_HOST, N_EXCHANGES,
+    load_messages, save_messages, retrieve,
+)
 
-OLLAMA_HOST = "http://localhost:11434"
-BASE_MODEL = "llama3.1:8b"
-SYSTEM_PROMPT = "You are a concise personal secretary."
 EXIT_COMMANDS = {"exit", "quit", "q"}
-CONTEXT_FILE = Path(__file__).with_name("chat-context.json")
-N_EXCHANGES = 10
 
 
 def post_ollama(path, payload):
@@ -19,7 +17,6 @@ def post_ollama(path, payload):
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-
     try:
         with urlopen(request, timeout=120) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -35,50 +32,8 @@ def post_ollama(path, payload):
 def chat(messages):
     return post_ollama(
         "/api/chat",
-        {
-            "model": BASE_MODEL,
-            "messages": messages,
-            "stream": False,
-        },
+        {"model": BASE_MODEL, "messages": messages, "stream": False},
     )
-
-
-def default_messages():
-    return [{"role": "system", "content": SYSTEM_PROMPT}]
-
-
-def load_messages():
-    if not CONTEXT_FILE.exists():
-        return default_messages()
-
-    try:
-        with CONTEXT_FILE.open("r", encoding="utf-8") as file:
-            data = json.load(file)
-    except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"Could not read {CONTEXT_FILE.name}: {error}") from error
-
-    messages = data.get("messages")
-    if not isinstance(messages, list):
-        raise RuntimeError(f"{CONTEXT_FILE.name} must contain a messages list.")
-
-    if not messages or messages[0].get("role") != "system":
-        messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
-
-    return messages
-
-def retrieve(messages, n):
-
-    return [messages[0]] + messages[1:][-(n * 2):]
-
-def save_messages(messages):
-    data = {
-        "model": BASE_MODEL,
-        "messages": messages,
-    }
-
-    with CONTEXT_FILE.open("w", encoding="utf-8") as file:
-        json.dump(data, file, indent=2)
-        file.write("\n")
 
 
 def main():
@@ -116,8 +71,7 @@ def main():
             print(f"Error: {error}")
             continue
 
-        assistant_message = result.get("message", {})
-        assistant_content = assistant_message.get("content", "").strip()
+        assistant_content = result.get("message", {}).get("content", "").strip()
 
         if not assistant_content:
             print("Assistant: [No response returned]")
