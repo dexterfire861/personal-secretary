@@ -2,10 +2,8 @@ import json
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from memory import (
-    BASE_MODEL, CONTEXT_FILE, OLLAMA_HOST, N_EXCHANGES,
-    load_messages, save_messages, retrieve,
-)
+from memory import BASE_MODEL, OLLAMA_HOST, N_EXCHANGES, load_messages, save_message, retrieve
+from reflect import run_reflection
 
 EXIT_COMMANDS = {"exit", "quit", "q"}
 
@@ -37,14 +35,9 @@ def chat(messages):
 
 
 def main():
-    try:
-        messages = load_messages()
-    except RuntimeError as error:
-        print(f"Error: {error}")
-        return
+    run_reflection()
 
     print(f"Chatting with {BASE_MODEL}. Type 'exit', 'quit', or 'q' to stop.")
-    print(f"Context file: {CONTEXT_FILE.name}")
 
     while True:
         try:
@@ -60,14 +53,12 @@ def main():
             print("Goodbye.")
             break
 
-        messages.append({"role": "user", "content": user_input})
-        save_messages(messages)
+        window = retrieve(user_input, N_EXCHANGES)
+        window.append({"role": "user", "content": user_input})
 
         try:
-            result = chat(retrieve(messages, N_EXCHANGES))
+            result = chat(window)
         except RuntimeError as error:
-            messages.pop()
-            save_messages(messages)
             print(f"Error: {error}")
             continue
 
@@ -77,8 +68,8 @@ def main():
             print("Assistant: [No response returned]")
             continue
 
-        messages.append({"role": "assistant", "content": assistant_content})
-        save_messages(messages)
+        save_message("user", user_input)
+        save_message("assistant", assistant_content)
         print(f"Assistant: {assistant_content}")
 
 

@@ -8,10 +8,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from memory import (
-    BASE_MODEL, OLLAMA_HOST, N_EXCHANGES,
-    load_messages, save_messages, retrieve,
-)
+from memory import BASE_MODEL, OLLAMA_HOST, N_EXCHANGES, save_message, retrieve
 
 app = FastAPI()
 app.add_middleware(
@@ -28,11 +25,11 @@ class ChatRequest(BaseModel):
 
 @app.post("/chat")
 def chat_endpoint(req: ChatRequest):
-    messages = load_messages()
-    messages.append({"role": "user", "content": req.message})
-    save_messages(messages)
-
-    window = retrieve(messages, N_EXCHANGES)
+    # Retrieve past context BEFORE saving current message so the current
+    # message isn't in Chroma yet (which would make it appear first in the
+    # window instead of last, causing the model to respond to past messages).
+    window = retrieve(req.message, N_EXCHANGES)
+    window.append({"role": "user", "content": req.message})
     accumulated = []
 
     def stream():
@@ -54,8 +51,10 @@ def chat_endpoint(req: ChatRequest):
                     accumulated.append(token)
                     yield token
 
-        messages.append({"role": "assistant", "content": "".join(accumulated)})
-        save_messages(messages)
+        response_text = "".join(accumulated)
+        if response_text:
+            save_message("user", req.message)
+            save_message("assistant", response_text)
 
     return StreamingResponse(stream(), media_type="text/plain")
 

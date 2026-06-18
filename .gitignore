@@ -1,0 +1,16 @@
+venv/
+__pycache__/
+chroma_store/
+memory.db
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzw
+*.pyzwz
+chat-context.json
+.env
+CLAUDE.md
+SPEC.md
