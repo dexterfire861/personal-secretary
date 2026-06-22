@@ -9,7 +9,7 @@ import json
 import time
 from urllib.request import Request, urlopen
 
-from db import get_messages_for_context, insert_reflection, get_reflections
+from db import get_messages_for_context, insert_reflection, get_active_reflections, supersede_reflection
 from memory import BASE_MODEL, OLLAMA_HOST
 
 REFLECTION_WINDOW = 30  # number of recent messages to reflect over
@@ -25,8 +25,11 @@ def run_reflection():
         f"{m['role'].upper()}: {m['content']}" for m in recent
     )
 
-    known = get_reflections()
-    known_text = "\n".join(f"- {k}" for k in known) if known else "(none yet)"
+    known = get_active_reflections()
+    known_text = (
+        "\n".join(f"[{k['id']}] {k['content']}" for k in known)
+        if known else "(none yet)"
+    )
 
     # -----------------------------------------------------------------------
     # WRITE YOUR REFLECTION PROMPT HERE.
@@ -59,10 +62,14 @@ to the lasting truth the exchange implies. Additionally, if the user is asking a
 repeat facts already listed above.
 - If a new fact supersedes an old one, state the new fact (e.g. an accepted job offer \
 replaces "interviewing").
-- One crisp sentence per fact. At most 5 facts.
+- One crisp sentence per fact.
 
 # Output format:
-Output one fact per line. No numbering, no bullets, no preamble, no commentary. \
+Output one fact per line, each in exactly this form:
+<fact> | replaces: <id>
+where <id> is the bracketed id of the single known fact this new fact updates or \
+contradicts, or the word `none` if the fact is genuinely new. Only use an id that \
+appears in the known list above. No numbering, no bullets, no preamble, no commentary. \
 If nothing durable was learned, output exactly: NOTHING_NEW
 
 # Already known about the user (do not repeat these; only surface what is new, updated, or contradicted):
@@ -75,9 +82,43 @@ Insights:""".format(conversation=conversation_text, known=known_text)
 
     try:
         insights = _call_llm(prompt)
-        if insights and "NOTHING_NEW" not in insights.upper():
-            insert_reflection(insights, time.time())
-            print(f"[Reflection saved]")
+        if not insights or "NOTHING_NEW" in insights.upper():
+            return
+
+        valid_ids = {k["id"] for k in known}   # old ids the LLM is allowed to replace
+        now = time.time()
+        saved = 0
+
+        for line in insights.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+
+            # Parse "<fact> | replaces: <id>"
+            fact_part, _, replaces_part = line.partition("|")
+            fact_text = fact_part.strip()
+            if not fact_text:
+                continue
+            _, _, id_str = replaces_part.partition(":")
+            id_str = id_str.strip()             # "12", "none", or "" on a malformed line
+
+            # Resolve which existing fact (if any) this one supersedes.
+            # "none" / junk / hallucinated id → no supersede, just a new fact.
+            old_id = None
+            try:
+                candidate = int(id_str)
+                if candidate in valid_ids:
+                    old_id = candidate
+            except ValueError:
+                pass
+
+            if old_id is not None:
+                supersede_reflection(old_id)
+            insert_reflection(fact_text, now)
+            saved += 1
+
+        if saved:
+            print(f"[Reflection saved: {saved} fact(s)]")
     except Exception as e:
         print(f"[Reflection failed: {e}]")
 

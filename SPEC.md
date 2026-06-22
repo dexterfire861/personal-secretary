@@ -102,15 +102,14 @@ surfaces facts about Aryaan across sessions.
   Both paths call `retrieve()` → `chat` → `save_message`, so memory behaves
   identically regardless of front-end.
 
-**Deferred debt (not yet built — do not let it block M3, but track it):**
-- Reflections only *append*; stale/contradicted facts are never superseded or
-  removed at the storage layer (e.g. "interviewing" lingers after "accepted
-  offer"). New reflections see old ones in-prompt but can't retract them.
-- **Reflection cadence in the server is wrong:** `server.py` calls
-  `run_reflection()` per `/chat` request, adding a blocking LLM round-trip to
-  every turn and (given the no-supersede debt above) spamming near-duplicate
-  reflections. Needs to move to a real cadence — server-startup, every-N-messages,
-  or a timer. Open decision below.
+**Deferred debt — RESOLVED:**
+- ✅ Supersede: reflections are now stored one fact per row; a new fact carries a
+  `replaces: <id>` tag and `reflect.py` flips the superseded fact to `active=0`
+  (soft-delete, audit trail kept). "Interviewing" no longer lingers after "accepted
+  offer."
+- ✅ Reflection cadence: `run_reflection()` runs once at startup in both `server.py`
+  and the REPL — the per-request blocking call is gone. Every-N-messages deferred
+  (see open decisions).
 
 Original spec below for reference.
 - **Semantic retrieval:** embed each memory as a vector; embed the incoming
@@ -159,9 +158,13 @@ Original spec below for reference.
 - [x] M1 storage: **SQLite** (`db.py`) — went straight to it, skipped the interim JSON file.
 - [x] M2 vector DB: **Chroma** (`embeddings.py`, persistent client).
 - [x] M2 embedding model: **`nomic-embed-text`** via Ollama `/api/embed`.
-- [ ] Reflection supersede strategy: how do stale/contradicted reflections get
-  retracted or replaced rather than just appended? (M2 deferred debt — resolve at M3.)
-- [ ] Reflection cadence (server): currently per-request (wrong). Move to
-  server-startup, every-N-messages, or a timer? (recommendation: every-N-messages.)
+- [x] Reflection supersede strategy: **LLM emits the mapping.** Active facts are
+  fed into the reflection prompt with their ids; the LLM tags each new fact with the
+  id it `replaces:` (or `none`). `reflect.py` parses per line, validates the id
+  against the active set (hallucinated-id guard), calls `supersede_reflection(old_id)`,
+  then inserts the new fact as its own row.
+- [x] Reflection cadence (server): **startup-only** (matches the REPL). The
+  per-request call is already gone. Every-N-messages deferred until a long-running
+  server actually goes stale in practice.
 - [ ] M3 orchestration: hand-rolled ReAct loop vs. LangGraph (decide at M3).
 - [ ] Model-routing: when does a task escalate from local to hosted API? (design at M3).
