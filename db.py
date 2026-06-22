@@ -23,9 +23,16 @@ def init_db():
             CREATE TABLE IF NOT EXISTS reflections (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
                 content   TEXT NOT NULL,
-                timestamp REAL NOT NULL
+                timestamp REAL NOT NULL,
+                active    INTEGER NOT NULL DEFAULT 1
             );
         """)
+        # Migration: older DBs have a reflections table without `active`.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(reflections)")}
+        if "active" not in cols:
+            conn.execute(
+                "ALTER TABLE reflections ADD COLUMN active INTEGER NOT NULL DEFAULT 1"
+            )
 
 
 def insert_message(role: str, content: str, timestamp: float) -> int:
@@ -73,18 +80,41 @@ def get_all_message_ids_and_content() -> list[tuple[int, str]]:
     return [(r["id"], r["content"]) for r in rows]
 
 
-def insert_reflection(content: str, timestamp: float):
+def insert_reflection(content: str, timestamp: float) -> int:
     with _connect() as conn:
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO reflections (content, timestamp) VALUES (?, ?)",
             (content, timestamp),
         )
+        return cur.lastrowid
+
+
+def supersede_reflection(reflection_id: int):
+    """Soft-delete: mark a reflection inactive instead of removing it,
+    preserving the audit trail of how a fact evolved."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE reflections SET active = 0 WHERE id = ?",
+            (reflection_id,),
+        )
+
+
+def get_active_reflections() -> list[dict]:
+    """Active facts with ids, so the supersede logic can reference which
+    existing fact a new one replaces."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, content FROM reflections WHERE active = 1 "
+            "ORDER BY timestamp DESC LIMIT 10"
+        ).fetchall()
+    return [{"id": r["id"], "content": r["content"]} for r in rows]
 
 
 def get_reflections() -> list[str]:
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT content FROM reflections ORDER BY timestamp DESC LIMIT 10"
+            "SELECT content FROM reflections WHERE active = 1 "
+            "ORDER BY timestamp DESC LIMIT 10"
         ).fetchall()
     return [r["content"] for r in rows]
 

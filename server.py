@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from memory import BASE_MODEL, OLLAMA_HOST, N_EXCHANGES, save_message, retrieve
+from reflect import run_reflection
 
 app = FastAPI()
 app.add_middleware(
@@ -25,6 +26,7 @@ class ChatRequest(BaseModel):
 
 @app.post("/chat")
 def chat_endpoint(req: ChatRequest):
+    
     # Retrieve past context BEFORE saving current message so the current
     # message isn't in Chroma yet (which would make it appear first in the
     # window instead of last, causing the model to respond to past messages).
@@ -62,4 +64,5 @@ def chat_endpoint(req: ChatRequest):
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 if __name__ == "__main__":
+    run_reflection()
     uvicorn.run(app, host="0.0.0.0", port=8000)

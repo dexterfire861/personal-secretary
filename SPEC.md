@@ -68,7 +68,11 @@ error handling already exists. (Note: `/api/create` and `/api/show` were explore
 but are NOT part of the architecture — personality lives in runtime-injected
 messages, never baked into a model file. Do not build on those endpoints.)
 
-### Milestone 1 — Memory that persists — 🔨 CURRENT
+### Milestone 1 — Memory that persists — ✅ DONE
+Persistence and a reload-on-restart chat loop exist. Storage went straight to
+SQLite (`db.py`) rather than the interim JSON file — the recency-only retrieval
+(`get_messages_for_context`) is still the fallback that seeds the context window.
+Original spec below for reference.
 Spec:
 - A terminal chat loop: read `input()`, append user + assistant turns to a
   `messages` list, re-send each turn. (This deliberately hits the "stateless wall.")
@@ -81,7 +85,34 @@ Spec:
 - Exit criterion: restart the script and it still "remembers" earlier conversation
   via reloaded last-N messages.
 
-### Milestone 2 — Semantic memory + reflection — 📋 NEXT (designed in outline)
+### Milestone 2 — Semantic memory + reflection — ✅ DONE
+Built: Chroma vector store (`embeddings.py`) over `nomic-embed-text`; the
+three-signal retrieval score `0.1·recency + 0.2·importance + 0.7·relevance` with
+a `cos_distance > 0.5` cutoff (`memory.py:retrieve`); per-message importance
+rating; and a session-start reflection job (`reflect.py`) that extracts durable
+facts and injects them into the system prompt. Exit criterion met: reflection
+surfaces facts about Aryaan across sessions.
+
+**Interfaces.** Two entry points share the same memory/retrieval core:
+- `constant-chat.py` — terminal REPL (the original spec target). Runs
+  `run_reflection()` once at session start.
+- `server.py` + `static/index.html` — a FastAPI server exposing `POST /chat`
+  with token streaming, plus a static browser chat UI. This grew beyond the
+  spec's "terminal chat loop"; it is now a supported surface, not stray scope.
+  Both paths call `retrieve()` → `chat` → `save_message`, so memory behaves
+  identically regardless of front-end.
+
+**Deferred debt (not yet built — do not let it block M3, but track it):**
+- Reflections only *append*; stale/contradicted facts are never superseded or
+  removed at the storage layer (e.g. "interviewing" lingers after "accepted
+  offer"). New reflections see old ones in-prompt but can't retract them.
+- **Reflection cadence in the server is wrong:** `server.py` calls
+  `run_reflection()` per `/chat` request, adding a blocking LLM round-trip to
+  every turn and (given the no-supersede debt above) spamming near-duplicate
+  reflections. Needs to move to a real cadence — server-startup, every-N-messages,
+  or a timer. Open decision below.
+
+Original spec below for reference.
 - **Semantic retrieval:** embed each memory as a vector; embed the incoming
   message; retrieve nearest neighbors. Introduces an embedding model (local via
   Ollama, e.g. `nomic-embed-text`) and a vector DB (**Chroma** recommended — rent
@@ -95,7 +126,7 @@ Spec:
 - Exit criterion: secretary surfaces something true about Aryaan it was never told
   directly in the current session, retrieved across sessions.
 
-### Milestone 3 — Tools via MCP (agentic) — 📋 FUTURE (not yet designed in detail)
+### Milestone 3 — Tools via MCP (agentic) — 🔨 CURRENT (not yet designed in detail)
 - Secretary gains hands: calls MCP tools. **Newsstand AI first** (Aryaan built it),
   then filesystem, calendar.
 - Introduces the ReAct reason-act loop and (optionally) LangGraph for orchestration.
@@ -125,8 +156,12 @@ Spec:
 - **Approval gates** on any action that posts, sends, spends, or deletes.
 
 ## 6. Open decisions (resolve as we reach them)
-- [ ] M1 storage: JSON now → SQLite at M2 (recommended; confirm when migrating).
-- [ ] M2 vector DB: Chroma (recommended) vs. alternative.
-- [ ] M2 embedding model: local `nomic-embed-text` via Ollama (recommended).
+- [x] M1 storage: **SQLite** (`db.py`) — went straight to it, skipped the interim JSON file.
+- [x] M2 vector DB: **Chroma** (`embeddings.py`, persistent client).
+- [x] M2 embedding model: **`nomic-embed-text`** via Ollama `/api/embed`.
+- [ ] Reflection supersede strategy: how do stale/contradicted reflections get
+  retracted or replaced rather than just appended? (M2 deferred debt — resolve at M3.)
+- [ ] Reflection cadence (server): currently per-request (wrong). Move to
+  server-startup, every-N-messages, or a timer? (recommendation: every-N-messages.)
 - [ ] M3 orchestration: hand-rolled ReAct loop vs. LangGraph (decide at M3).
-- [ ] Model-routing: when does a task escalate from local to hosted API? (design at M2/M3).
+- [ ] Model-routing: when does a task escalate from local to hosted API? (design at M3).

@@ -9,7 +9,7 @@ import json
 import time
 from urllib.request import Request, urlopen
 
-from db import get_messages_for_context, insert_reflection
+from db import get_messages_for_context, insert_reflection, get_reflections
 from memory import BASE_MODEL, OLLAMA_HOST
 
 REFLECTION_WINDOW = 30  # number of recent messages to reflect over
@@ -25,6 +25,9 @@ def run_reflection():
         f"{m['role'].upper()}: {m['content']}" for m in recent
     )
 
+    known = get_reflections()
+    known_text = "\n".join(f"- {k}" for k in known) if known else "(none yet)"
+
     # -----------------------------------------------------------------------
     # WRITE YOUR REFLECTION PROMPT HERE.
     # Goal: given the raw conversation turns, produce 3-5 short bullet points
@@ -38,16 +41,41 @@ def run_reflection():
     #   - If nothing notable was learned in this window, say "Nothing new to note."
     # -----------------------------------------------------------------------
 
-    prompt = """WRITE YOUR REFLECTION PROMPT HERE.
+    prompt = """You are a memory-extraction analyst. Read the conversation below and \
+identify durable facts worth remembering about the user long-term. You are NOT having \
+a conversation — you are extracting structured facts for a secretary's memory that will improve your ability to serve the user.
+
+
+# Your task:
+Extract durable facts about the user: their goals, preferences, relationships, and \
+constraints. Critically, infer the STANDING fact behind a transient detail rather than \
+recording the detail itself. Example: if the user asks about a heap problem, the durable \
+fact is "preparing for technical interviews," NOT "asked about heaps." Always generalize \
+to the lasting truth the exchange implies. Additionally, if the user is asking about a specific topic, you should extract the fact that they are interested in that topic and bring about relevant information.
+
+# Rules:
+- Record persistent facts, not transient ones (ignore one-off questions, passing mentions).
+- Only surface what is NEW, or what UPDATES or CONTRADICTS an already-known fact. Do not \
+repeat facts already listed above.
+- If a new fact supersedes an old one, state the new fact (e.g. an accepted job offer \
+replaces "interviewing").
+- One crisp sentence per fact. At most 5 facts.
+
+# Output format:
+Output one fact per line. No numbering, no bullets, no preamble, no commentary. \
+If nothing durable was learned, output exactly: NOTHING_NEW
+
+# Already known about the user (do not repeat these; only surface what is new, updated, or contradicted):
+{known}
 
 Conversation:
 {conversation}
 
-Insights:""".format(conversation=conversation_text)
+Insights:""".format(conversation=conversation_text, known=known_text)
 
     try:
         insights = _call_llm(prompt)
-        if insights and "nothing new" not in insights.lower():
+        if insights and "NOTHING_NEW" not in insights.upper():
             insert_reflection(insights, time.time())
             print(f"[Reflection saved]")
     except Exception as e:
