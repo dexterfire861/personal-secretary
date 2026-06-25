@@ -12,7 +12,10 @@ from db import (
 from embeddings import upsert, query_similar
 
 # Storage: SQLite (M2) + Chroma vector store
+# Model routing (cheap-by-default): BASE for chat + reflection (quality matters),
+# FAST for trivial classification like importance rating. Swap models in one place.
 BASE_MODEL = "llama3.1:8b"
+FAST_MODEL = "llama3.2:3b"
 EMBED_MODEL = "nomic-embed-text"
 OLLAMA_HOST = "http://localhost:11434"
 SYSTEM_PROMPT = (
@@ -56,9 +59,9 @@ def load_messages() -> list[dict]:
     return [{"role": "system", "content": system_content}] + recent
 
 
-def save_message(role: str, content: str):
+def save_message(role: str, content: str, session_id: int | None = None):
     ts = time.time()
-    msg_id = insert_message(role, content, ts)
+    msg_id = insert_message(role, content, ts, session_id=session_id)
     upsert(msg_id, content)
     _rate_importance(msg_id, content)
 
@@ -96,7 +99,7 @@ Respond with a single integer 0-10.""".format(content=content)
 
 def _call_rating(prompt: str) -> float:
     payload = json.dumps({
-        "model": BASE_MODEL,
+        "model": FAST_MODEL,  # routed: a 0-10 score doesn't need the 8B
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
     }).encode()
@@ -195,6 +198,5 @@ def retrieve(query: str, n: int) -> list[dict]:
         print()
 
     return system_msg + [{"role": m["role"], "content": m["content"]} for m in selected]
-
 
 

@@ -125,20 +125,106 @@ Original spec below for reference.
 - Exit criterion: secretary surfaces something true about Aryaan it was never told
   directly in the current session, retrieved across sessions.
 
-### Milestone 3 — Tools via MCP (agentic) — 🔨 CURRENT (not yet designed in detail)
-- Secretary gains hands: calls MCP tools. **Newsstand AI first** (Aryaan built it),
-  then filesystem, calendar.
-- Introduces the ReAct reason-act loop and (optionally) LangGraph for orchestration.
-- Human-approval gates for any tool that posts, sends, or spends.
-- NOT designed in detail yet — do not pre-build Milestone 1/2 to anticipate this.
+### Milestone 3 — Tools via MCP (agentic) — 🔨 mostly shipped
+**STATUS (2026-06):** One shared agent core (`agent_runtime.py`) used by the FastAPI
+server (interactive chat) and the background worker. **Interactive chat now has hands** —
+it runs the ReAct loop and streams structured events (`tool_call`/`tool_result`/`final`)
+over SSE; verified firing `list_directory` against the real filesystem. Filesystem MCP
+read tools (`read_text_file`, `list_directory`, `search_files`) registered at startup.
+Model routing live (`FAST_MODEL` for importance rating). **Trimmed to essentials** —
+approvals, connector dashboard, and multi-connector placeholders removed (chat + tasks +
+memory only). Remaining (PARKED in favor of the M4 finance harness): filesystem **write +
+approval gate**, then calendar/gmail. See ARCHITECTURE.md for the running data flow.
+
+- Secretary gains hands: calls tools. First real MCP = **official filesystem server,
+  read-only** (no auth, no gate — cheapest way to learn the MCP client). Then calendar
+  / gmail (OAuth + write gates). **Building MCP servers is deliberately out of scope:**
+  it's already Aryaan's strength — M3 is about the *client* + agent loop, not authoring
+  servers. Newsstand AI is deprioritized (not running / not useful in its current
+  state); integrate an existing server instead of forcing it.
+- **Mechanism:** Ollama native tool-calling (`tools` param on `/api/chat`, model
+  returns structured `message.tool_calls`). Hand-rolled ReAct *loop* (no LangGraph —
+  it would hide the glue Aryaan is here to learn). The loop wraps the existing single
+  `chat()` call: chat → if `tool_calls`, dispatch + append `role:"tool"` result →
+  loop → else final answer.
+- **Build-vs-rent:** the loop, `dispatch()`, and the approval gate are Aryaan's
+  (novel glue). The MCP client (connect/list/call) and tool-schema bridge are rented
+  plumbing (official MCP Python SDK).
+- Human-approval gates for any tool that posts, sends, or spends — gate lives in
+  `dispatch()`. Only bites on write tools, so it lands with the first write tool, not
+  before.
+
+**Slice plan (one working stopping point each):**
+- **1a — loop against a trivial local tool — ✅ done.** REPL path
+  (`constant-chat.py`), non-streaming. `TOOL_REGISTRY` + `TOOL_SCHEMAS` + `get_time`,
+  `dispatch()`, and `run_agent()` (the loop, capped at `MAX_TOOL_ITERATIONS`). No MCP,
+  no gate. `dispatch` verified in isolation; exit = live REPL run where `get_time`
+  actually fires on "what time is it?".
+- **1b — filesystem MCP read tools — ✅ done (live in chat + worker).** Server
+  scoped to Aryaan's `aryaanverma` directory, **read+write, NO delete** (least
+  privilege at the server boundary). But this slice **exposes only the read tools** to
+  the model (`read_file`, `list_directory`) — the loop chooses which MCP tools to
+  bridge into `TOOL_SCHEMAS`. Loop unchanged; add the MCP client (official Python SDK,
+  stdio). The MCP-client learning step — no OAuth, no gate.
+- **1b-write — expose filesystem write + build the approval gate.** Register the
+  write tool; the gate lives in `dispatch()` and fires before any mutating call
+  (overwrite is mutating even without delete). This is where the gate lands — with the
+  first write tool, which is now filesystem, not gmail. One new thing at a time:
+  client first (1b), gate second (1b-write).
+- **1c — Google Calendar (read).** Reuse the MCP client; add Google OAuth. Read tools
+  only (list events / freebusy) → no gate. First genuinely useful surface.
+- **1d — Gmail (read→send).** Read first; send reuses the 1b-write gate. Then server
+  (streaming) tool-calling. End of the M3 spine.
+
+**Surfaces decided (2026-06): calendar, email, notes — Google ecosystem only.**
+Considered and parked as *Beyond* (do NOT bolt MCPs on now): finance research /
+prediction markets, content creation, personal finance. These are whole modules with
+their own logic (risk rules, thesis synthesis, voice), not secretary reach-tools — a
+tool with no module behind it does nothing. Tool-count discipline: an 8B model's
+tool-selection degrades as the list grows, so keep registered tools to ~3–5.
+
+Deferred out of M3 (over-build radar): model-routing/escalation (not needed to get
+hands working), LangGraph, server-side streaming tool-calls.
+
+### Milestone 4 — Prediction-market research harness (paper) — 🔨 ACTIVE DIRECTION
+Promoted from "Beyond" (2026-06) — the one Beyond module brought forward; personal
+finance and content stay parked. **Paper ONLY** — never real money until a defensible,
+forward-tracked edge (Aryaan's own risk rule, non-negotiable).
+
+**Arena: Kalshi** (CFTC-regulated, US-legal, clean API). Chosen over equities/filings
+because it's *structurally less efficient* (fits "be better than enough people"), has
+documented biases, and **resolves to clean YES/NO labels** → fast, honest out-of-sample
+feedback. Caveat: low capacity (fine for research + a small pool, won't scale big).
+
+**First hypothesis (the harness's acceptance test, not a commitment): news
+under-reaction.** When news relevant to a market breaks at t₀, the implied probability
+adjusts too slowly, leaving a window Δ (1h/6h/24h) to trade the news direction. Edge
+exists only if price moves predictably *after* t₀. Crux = accurate news timestamps
+aligned to markets (this is the make-or-break, not the agent).
+
+**v1 = a forward-tracked prediction harness, scored end-to-end** (NOT a trading bot),
+built on `agent_runtime` + the worker queue:
+1. Kalshi ingest (free API): markets, intraday prices, resolution.
+2. News timestamps: free first — **GDELT** or Aryaan's own **Newsstand AI**. (LSEG/
+   Refinitiv deferred: enterprise-priced, entitlement-gated; only its Reuters *news*
+   slice is relevant, and only worth it if v1 proves news quality is the binding
+   constraint.)
+3. Agent emits a structured call (market, direction, model prob vs market prob, rationale).
+4. DB logs each call at t₀; scoring job grades on resolution (Brier/calibration + P&L
+   vs price taken).
+Done = one news-under-reaction call logged and scored against a real resolved market.
+Build the harness logic by hand; rent the data/LLM. Codex's connector dashboard,
+approvals, and multi-session stay dormant — do not extend or depend on them.
+
+**Re-prioritization:** the M3 tool-layer work is now pointed at finance data (Kalshi +
+news) in service of this harness. Generic calendar/gmail slices are PARKED; filesystem
+read (1b) remains the MCP-client reference. Hosted-API escalation still deferred.
 
 ### Beyond — modules that ride on the spine (vision, not current work)
+- **Personal finance:** read-only account/spend data + pattern surfacing. Parked.
 - **Content Intelligence:** ingest post analytics + transcripts, surface patterns,
-  draft hooks in Aryaan's voice (veto retained).
+  draft hooks in Aryaan's voice (veto retained). Parked.
 - **Content Production pipeline:** Whisper transcription → rough-cut → caption drafts.
-- **Finance Research agent:** background research over Newsstand AI + market data,
-  thesis synthesis, **paper trading only** (strict risk rules — never real money
-  until 3+ months logged paper trading and a defensible edge).
 - **Voice fine-tune:** optional QLoRA on Aryaan's own writing (rented GPU, not local).
 
 ## 5. Design constraints / non-negotiables
@@ -166,5 +252,15 @@ Original spec below for reference.
 - [x] Reflection cadence (server): **startup-only** (matches the REPL). The
   per-request call is already gone. Every-N-messages deferred until a long-running
   server actually goes stale in practice.
-- [ ] M3 orchestration: hand-rolled ReAct loop vs. LangGraph (decide at M3).
-- [ ] Model-routing: when does a task escalate from local to hosted API? (design at M3).
+- [x] M3 orchestration: **hand-rolled ReAct loop + Ollama native tool-calling.**
+  No LangGraph (hides the glue). See Milestone 3 for the loop shape and slice plan.
+- [x] M3 / slice 1b target: **official filesystem MCP server, read-only**, over the
+  Python SDK's stdio transport. (Newsstand AI deprioritized — not running / not useful
+  now. Authoring MCP servers is out of M3 scope; it's already Aryaan's strength.)
+- [~] Model-routing: **local cheap-by-default routing started** — `FAST_MODEL`
+  (`llama3.2:3b`) for trivial classification (importance rating); `BASE_MODEL` (8B)
+  for chat + reflection. Minimal: two constants + a dispatch point, not an engine.
+  Multimodal (qwen2.5vl for vision/video; Whisper for audio) is a *swap* route to add
+  only when a milestone consumes it (content pipeline / finance chart-reading) — not
+  speculatively (18GB RAM can't keep 8B + qwen warm). Hosted-API escalation still
+  deferred — revisit if 8B tool-calling proves unreliable in the loop.

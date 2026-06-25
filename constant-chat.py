@@ -1,41 +1,27 @@
-import json
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+"""Terminal playground REPL — NOT part of the served system.
 
-from memory import BASE_MODEL, OLLAMA_HOST, N_EXCHANGES, load_messages, save_message, retrieve
+A thin scratch surface for exercising the shared AgentRuntime + MCP tools from the
+terminal. It shares the one agent core (agent_runtime.py) the server and worker use,
+so there is no duplicate agent logic to maintain. The real product is server.py +
+worker.py + frontend/.
+"""
+
+from agent_runtime import AgentRuntime, get_filesystem_server_args
+from mcp_client import MCPClient
+from memory import BASE_MODEL, N_EXCHANGES, save_message, retrieve
 from reflect import run_reflection
 
 EXIT_COMMANDS = {"exit", "quit", "q"}
 
 
-def post_ollama(path, payload):
-    request = Request(
-        f"{OLLAMA_HOST}{path}",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=120) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except HTTPError as error:
-        body = error.read().decode("utf-8")
-        raise RuntimeError(f"{path} failed with {error.code}: {body}") from error
-    except URLError as error:
-        raise RuntimeError(
-            f"Could not reach Ollama at {OLLAMA_HOST}. Is `ollama serve` running?"
-        ) from error
-
-
-def chat(messages):
-    return post_ollama(
-        "/api/chat",
-        {"model": BASE_MODEL, "messages": messages, "stream": False},
-    )
-
-
 def main():
     run_reflection()
+
+    mcp = MCPClient("npx", get_filesystem_server_args())
+    mcp.start()                      # plumbing: spawn server + open the session
+    runtime = AgentRuntime()
+    registered = runtime.register_mcp_read_tools(mcp)
+    print(f"Registered read tools: {', '.join(registered) or 'none'}")
 
     print(f"Chatting with {BASE_MODEL}. Type 'exit', 'quit', or 'q' to stop.")
 
@@ -57,12 +43,10 @@ def main():
         window.append({"role": "user", "content": user_input})
 
         try:
-            result = chat(window)
+            assistant_content = runtime.run(window).strip()
         except RuntimeError as error:
             print(f"Error: {error}")
             continue
-
-        assistant_content = result.get("message", {}).get("content", "").strip()
 
         if not assistant_content:
             print("Assistant: [No response returned]")
@@ -71,6 +55,8 @@ def main():
         save_message("user", user_input)
         save_message("assistant", assistant_content)
         print(f"Assistant: {assistant_content}")
+
+    mcp.stop()
 
 
 if __name__ == "__main__":
